@@ -97,8 +97,10 @@ def train_models_cached(df_clean, predict_cols, lag_cols):
 
 # 載入資料與模型
 try:
-    df, df_clean, predict_cols, lag_cols = load_and_preprocess_data()
-    lr_models, rf_models, gbdt_models, meta_learners, feature_names, metrics_dict, df_test, test_predictions = train_models_cached(df_clean, predict_cols, lag_cols)
+    with st.spinner("正在載入歷史天氣觀測數據..."):
+        df, df_clean, predict_cols, lag_cols = load_and_preprocess_data()
+    with st.spinner("⚡ 正在為 32 個氣候變數訓練時空感知門控與多輸出集成模型（首次啟動因快取重建約需 1-2 分鐘，完成後將享有毫秒級瞬時響應）..."):
+        lr_models, rf_models, gbdt_models, meta_learners, feature_names, metrics_dict, df_test, test_predictions = train_models_cached(df_clean, predict_cols, lag_cols)
     load_success = True
 except Exception as e:
     load_success = False
