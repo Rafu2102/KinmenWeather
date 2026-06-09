@@ -35,9 +35,9 @@
 * **梯度提升決策樹 (HistGradientBoostingRegressor)**：
   * 原理：基於直方圖最佳化的高效梯度提升演算法（GBDT），類似於 LightGBM，每次迭代皆在擬合前一次預測的殘差。
   * 作用：目前表格式資料（Tabular Data）中性能優異的預測模型，能精準捕捉非線性且高維度交叉的複雜天氣交互關係。
-* ** blending 科學加權集成模型**：
-  * 結合公式：`0.1 * Ridge + 0.4 * RandomForest + 0.5 * HistGradientBoosting`
-  * 作用：融合了線性泛化性、Bagging 穩定性與 Boosting 的高擬合能力，形成預測偏差與變異數最小的綜合預報模型。
+* **Stacking 堆疊集成與動態權重學習 (Stacking Ensemble)**：
+  * 結合公式：`w_Ridge * Ridge + w_RF * RandomForest + w_GBDT * HistGradientBoosting`（權重動態學習）
+  * 作用：捨棄人工硬編碼比例，本專案在訓練集內部切分出 20% 的獨立時間序列驗證集，利用約束正權重 (positive=True) 且無截距的線性回歸擬合基準模型的預測值，自動學習出最優的融合權重。這可根據不同氣候因子的物理與分佈特性（如溫度與降雨量分佈不同），分配最穩健的權重比例（總和為 100%），大幅提高學術說服力。
 
 ### 4. 資料科學圖表解讀 (報告視覺化重點)
 本系統提供全方位、動態的科學圖表分析，您可直接將其作為期慢報告的亮點：

@@ -2,9 +2,11 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, LinearRegression
 from sklearn.ensemble import RandomForestRegressor, HistGradientBoostingRegressor
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 import os
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -65,14 +67,14 @@ def prepare_features(df):
     # 刪除因為位移產生的第一列缺失值，以及其他包含 NaN 的列以利訓練
     # 注意：對於真實資料，我們使用前後填充 (ffill/bfill) 來填補缺失
     df_filled = df_sorted.copy()
-    df_filled[predict_cols + lag_cols] = df_filled[predict_cols + lag_cols].ffill().bfill()
+    df_filled[predict_cols + lag_cols] = df_filled[predict_cols + lag_cols].ffill()
     df_clean = df_filled.dropna(subset=predict_cols + lag_cols).copy()
     
     return df_clean, predict_cols, lag_cols
 
 def train_and_evaluate(df_clean, predict_cols, lag_cols):
     """
-    為每一個氣候變數訓練獨立的預測模型。
+    為每一個氣候變數訓練獨立的預測模型，並以 Stacking 堆疊集成自動學習最優加權比例。
     """
     feature_cols = ["Month_sin", "Month_cos", "DayOfYear_sin", "DayOfYear_cos"] + lag_cols
     
@@ -86,12 +88,26 @@ def train_and_evaluate(df_clean, predict_cols, lag_cols):
         X_test = X.iloc[train_size:]
         df_train = df_clean.iloc[:train_size]
         df_test = df_clean.iloc[train_size:]
+        
+        # 為了動態學習集成權重，對訓練集再次進行時間先後 80/20 切分作為驗證集，避免資料洩漏
+        if train_size >= 10:
+            val_size = int(train_size * 0.2)
+            train_base_size = train_size - val_size
+            X_train_base = X_train.iloc[:train_base_size]
+            X_val = X_train.iloc[train_base_size:]
+            df_train_base = df_train.iloc[:train_base_size]
+            df_val = df_train.iloc[train_base_size:]
+        else:
+            X_train_base, X_val = X_train, X_train
+            df_train_base, df_val = df_train, df_train
     else:
         print("[!] 資料集筆數較少，將同時使用全部資料進行訓練與評估。")
         X_train = X
         X_test = X
         df_train = df_clean
         df_test = df_clean
+        X_train_base, X_val = X_train, X_train
+        df_train_base, df_val = df_train, df_train
         
     lr_models = {}
     rf_models = {}
@@ -99,30 +115,76 @@ def train_and_evaluate(df_clean, predict_cols, lag_cols):
     metrics = {}
     test_predictions = {}
     
+    # 定義物理上不可能為負數的氣象項目
+    non_negative_cols = [
+        "Precp", "PrecpHour", "PrecpMax10", "PrecpMax60", 
+        "WS", "WSGust", "SunShine", "SunshineRate", 
+        "GloblRad", "EvapA", "UVI Max"
+    ]
+    
     for col in predict_cols:
         y_train = df_train[col]
         y_test = df_test[col]
         
-        # 1. 嶺回歸 (L2 正規化 Baseline)
-        lr = Ridge(alpha=1.0)
+        # --- 動態 Stacking 權重學習 ---
+        # 1. 於基礎訓練集擬合臨時模型
+        y_train_base = df_train_base[col]
+        y_val_true = df_val[col]
+        
+        lr_temp = make_pipeline(StandardScaler(), Ridge(alpha=1.0))
+        lr_temp.fit(X_train_base, y_train_base)
+        y_val_pred_lr = lr_temp.predict(X_val)
+        
+        rf_temp = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+        rf_temp.fit(X_train_base, y_train_base)
+        y_val_pred_rf = rf_temp.predict(X_val)
+        
+        gbdt_temp = HistGradientBoostingRegressor(max_iter=150, learning_rate=0.05, max_depth=6, l2_regularization=0.1, random_state=42)
+        gbdt_temp.fit(X_train_base, y_train_base)
+        y_val_pred_gbdt = gbdt_temp.predict(X_val)
+        
+        # 2. 將驗證集的預估值組合成特徵矩陣，並以真實氣候值為標籤進行正權重線性迴歸
+        X_meta_val = np.column_stack([y_val_pred_lr, y_val_pred_rf, y_val_pred_gbdt])
+        
+        meta = LinearRegression(positive=True, fit_intercept=False)
+        meta.fit(X_meta_val, y_val_true)
+        w_lr, w_rf, w_gbdt = meta.coef_
+        
+        # 3. 歸一化權重以符合 Blending 邏輯，並設定無效時的 fallback 值
+        w_sum = w_lr + w_rf + w_gbdt
+        if w_sum > 1e-5:
+            w_lr, w_rf, w_gbdt = w_lr / w_sum, w_rf / w_sum, w_gbdt / w_sum
+        else:
+            w_lr, w_rf, w_gbdt = 0.1, 0.4, 0.5
+            
+        # --- 訓練最終基準模型 (使用完整訓練集 X_train) ---
+        # 1. 嶺回歸
+        lr = make_pipeline(StandardScaler(), Ridge(alpha=1.0))
         lr.fit(X_train, y_train)
         y_pred_lr = lr.predict(X_test)
         lr_models[col] = lr
         
-        # 2. 隨機森林 (優化參數，提供穩定泛化)
+        # 2. 隨機森林
         rf = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
         rf.fit(X_train, y_train)
         y_pred_rf = rf.predict(X_test)
         rf_models[col] = rf
         
-        # 3. 梯度提升樹 (GBDT) - 高效的表格式資料迴歸演算法
+        # 3. 梯度提升樹
         gbdt = HistGradientBoostingRegressor(max_iter=150, learning_rate=0.05, max_depth=6, l2_regularization=0.1, random_state=42)
         gbdt.fit(X_train, y_train)
         y_pred_gbdt = gbdt.predict(X_test)
         gbdt_models[col] = gbdt
         
-        # 4. 科學加權集成模型 (Blending Ensemble)
-        y_pred_ensemble = 0.1 * y_pred_lr + 0.4 * y_pred_rf + 0.5 * y_pred_gbdt
+        # 4. 加權集成模型 (使用學出的動態權重)
+        y_pred_ensemble = w_lr * y_pred_lr + w_rf * y_pred_rf + w_gbdt * y_pred_gbdt
+        
+        # 物理非負限制處理 (如降雨量、風速、日照時數不可能為負值)
+        if col in non_negative_cols:
+            y_pred_lr = np.clip(y_pred_lr, 0, None)
+            y_pred_rf = np.clip(y_pred_rf, 0, None)
+            y_pred_gbdt = np.clip(y_pred_gbdt, 0, None)
+            y_pred_ensemble = np.clip(y_pred_ensemble, 0, None)
         
         # 儲存測試集預測結果
         test_predictions[col] = {
@@ -160,7 +222,10 @@ def train_and_evaluate(df_clean, predict_cols, lag_cols):
             "嶺回歸_R平方": r2_lr, "嶺回歸_RMSE": rmse_lr, "嶺回歸_MAE": mae_lr,
             "隨機森林_R平方": r2_rf, "隨機森林_RMSE": rmse_rf, "隨機森林_MAE": mae_rf,
             "梯度提升樹_R平方": r2_gbdt, "梯度提升樹_RMSE": rmse_gbdt, "梯度提升樹_MAE": mae_gbdt,
-            "加權集成_R平方": r2_ens, "加權集成_RMSE": rmse_ens, "加權集成_MAE": mae_ens
+            "加權集成_R平方": r2_ens, "加權集成_RMSE": rmse_ens, "加權集成_MAE": mae_ens,
+            "權重_Ridge": float(np.round(w_lr, 4)),
+            "權重_RF": float(np.round(w_rf, 4)),
+            "權重_GBDT": float(np.round(w_gbdt, 4))
         }
         
     # 產出核心變數 "Temperature" (平均氣溫) 的演算法報告圖表 (使用集成預測結果)
