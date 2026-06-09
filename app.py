@@ -332,6 +332,35 @@ else:
         is_future = pd.to_datetime(predict_date) > pd.to_datetime(max_date)
         
         # 執行遞迴預測邏輯
+        def get_historical_or_cached_value(date_val, col_name, df_clean, selected_station, max_known_date, max_known_row):
+            t_date = pd.to_datetime(date_val)
+            t_max_known = pd.to_datetime(max_known_date)
+            
+            # 1. 恰好為最後一天
+            if t_date == t_max_known:
+                return max_known_row[col_name]
+                
+            # 2. 未來日期：從快取讀取
+            if t_date > t_max_known:
+                if "forecast_cache" in st.session_state and t_date in st.session_state.forecast_cache:
+                    cached = st.session_state.forecast_cache[t_date]
+                    if "pred_ensemble_dict" in cached:
+                        return cached["pred_ensemble_dict"][col_name]
+                return 0.0
+                
+            # 3. 歷史日期：從真實數據庫提取
+            hist_row = df_clean[(df_clean["Date"] == t_date) & (df_clean["StationID"] == selected_station)]
+            if len(hist_row) > 0:
+                return hist_row.iloc[0][col_name]
+                
+            # 歷史日期缺失兜底
+            hist_all = df_clean[df_clean["StationID"] == selected_station]
+            if len(hist_all) > 0:
+                time_diff = (hist_all["Date"] - t_date).abs()
+                return hist_all.loc[time_diff.idxmin()][col_name]
+                
+            return 0.0
+
         # 找出最後一個已知的日期
         station_rows = df_clean[df_clean["StationID"] == selected_station].sort_values(by="Date")
         if len(station_rows) == 0:
@@ -474,21 +503,12 @@ else:
                     x_pred_arr[0, feat_idx["DayOfYear_cos"]] = block_data["DayOfYear_cos"]
                     
                     for col in predict_cols:
-                        if current_block_start == pd.to_datetime(max_known_date):
-                            x_pred_arr[0, feat_idx[f"{col}_lag1"]] = max_known_row[f"{col}_lag1"]
-                            x_pred_arr[0, feat_idx[f"{col}_lag2"]] = max_known_row[f"{col}_lag2"]
-                            x_pred_arr[0, feat_idx[f"{col}_diff1"]] = max_known_row[f"{col}_diff1"]
-                        else:
-                            val_B = st.session_state.forecast_cache[current_block_start]["pred_ensemble_dict"][col]
-                            prev_date = current_block_start - pd.Timedelta(days=1)
-                            if prev_date == pd.to_datetime(max_known_date):
-                                val_B_minus_1 = max_known_row[col]
-                            else:
-                                val_B_minus_1 = st.session_state.forecast_cache[prev_date]["pred_ensemble_dict"][col]
-                                
-                            x_pred_arr[0, feat_idx[f"{col}_lag1"]] = val_B
-                            x_pred_arr[0, feat_idx[f"{col}_lag2"]] = val_B_minus_1
-                            x_pred_arr[0, feat_idx[f"{col}_diff1"]] = val_B - val_B_minus_1
+                        val_B = get_historical_or_cached_value(current_block_start, col, df_clean, selected_station, max_known_date, max_known_row)
+                        val_B_minus_1 = get_historical_or_cached_value(current_block_start - pd.Timedelta(days=1), col, df_clean, selected_station, max_known_date, max_known_row)
+                        
+                        x_pred_arr[0, feat_idx[f"{col}_lag1"]] = val_B
+                        x_pred_arr[0, feat_idx[f"{col}_lag2"]] = val_B_minus_1
+                        x_pred_arr[0, feat_idx[f"{col}_diff1"]] = val_B - val_B_minus_1
                             
                     X_pred_df = pd.DataFrame(x_pred_arr, columns=feature_names)
                     
@@ -546,22 +566,11 @@ else:
                         
                         for col in predict_cols:
                             if h == 1:
-                                if current_block_start == pd.to_datetime(max_known_date):
-                                    val_lag1 = max_known_row[col]
-                                else:
-                                    val_lag1 = st.session_state.forecast_cache[current_block_start]["pred_ensemble_dict"][col]
-                                    
-                                prev_date = current_block_start - pd.Timedelta(days=1)
-                                if prev_date == pd.to_datetime(max_known_date):
-                                    val_lag2 = max_known_row[col]
-                                else:
-                                    val_lag2 = st.session_state.forecast_cache[prev_date]["pred_ensemble_dict"][col]
+                                val_lag1 = get_historical_or_cached_value(current_block_start, col, df_clean, selected_station, max_known_date, max_known_row)
+                                val_lag2 = get_historical_or_cached_value(current_block_start - pd.Timedelta(days=1), col, df_clean, selected_station, max_known_date, max_known_row)
                             elif h == 2:
                                 val_lag1 = pred_ensemble_block[0][col]
-                                if current_block_start == pd.to_datetime(max_known_date):
-                                    val_lag2 = max_known_row[col]
-                                else:
-                                    val_lag2 = st.session_state.forecast_cache[current_block_start]["pred_ensemble_dict"][col]
+                                val_lag2 = get_historical_or_cached_value(current_block_start, col, df_clean, selected_station, max_known_date, max_known_row)
                             else:
                                 val_lag1 = pred_ensemble_block[h-2][col]
                                 val_lag2 = pred_ensemble_block[h-3][col]
