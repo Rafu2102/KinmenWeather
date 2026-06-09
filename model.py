@@ -9,8 +9,8 @@ import os
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# 設定中文畫圖字型避免亂碼
-plt.rcParams["font.family"] = ["Microsoft JhengHei"]
+# 設定中文畫圖字型避免亂碼 (相容 Windows 與 Linux 雲端環境)
+plt.rcParams["font.family"] = ["Microsoft JhengHei", "Noto Sans CJK TC", "Noto Sans CJK JP", "WenQuanYi Micro Hei", "sans-serif"]
 plt.rcParams["axes.unicode_minus"] = False
 
 def prepare_features(df):

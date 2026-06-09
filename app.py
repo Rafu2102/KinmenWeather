@@ -18,8 +18,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 解決 Matplotlib 中文顯示問題
-plt.rcParams["font.family"] = ["Microsoft JhengHei"]
+# 解決 Matplotlib 中文顯示問題 (相容 Windows 與 Linux 雲端環境)
+plt.rcParams["font.family"] = ["Microsoft JhengHei", "Noto Sans CJK TC", "Noto Sans CJK JP", "WenQuanYi Micro Hei", "sans-serif"]
 plt.rcParams["axes.unicode_minus"] = False
 
 # 中央氣象署 (CWA) 欄位之正統繁體中文對照表
