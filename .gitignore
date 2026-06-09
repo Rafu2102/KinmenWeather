@@ -1,0 +1,25 @@
+# Python 快取與二進位檔案
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虛擬環境
+.venv/
+venv/
+ENV/
+env/
+
+# IDE 設定檔
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# macOS 系統臨時檔
+.DS_Store
+
+# 原始大體積氣象觀測資料夾 (已將合併後的 10 年資料 kinmen_weather_10y.csv 提交，故不需重複提交原始月份 CSV)
+/日月CSV/
